@@ -8,11 +8,12 @@ interface DbShape {
   refreshTokens: any[];
   questions: any[];
   examAttempts: any[];
+  passwordResets: any[];
 }
 
 function loadData(): DbShape {
   if (!fs.existsSync(DB_PATH)) {
-    const empty: DbShape = { users: [], refreshTokens: [], questions: [], examAttempts: [] };
+    const empty: DbShape = { users: [], refreshTokens: [], questions: [], examAttempts: [], passwordResets: [] };
     fs.writeFileSync(DB_PATH, JSON.stringify(empty, null, 2));
     return empty;
   }
@@ -37,6 +38,32 @@ export const store = {
     data.users.push(row);
     persist();
     return row;
+  },
+  updateUserPassword(userId: string, passwordHash: string) {
+    const user = data.users.find((u) => u.id === userId);
+    if (user) user.password_hash = passwordHash;
+    persist();
+  },
+
+  createPasswordReset(email: string, code: string, expiresAt: string) {
+    data.passwordResets = data.passwordResets || [];
+    data.passwordResets.push({ email, code, expires_at: expiresAt, used: false });
+    persist();
+  },
+  findValidPasswordReset(email: string, code: string) {
+    const now = new Date().toISOString();
+    data.passwordResets = data.passwordResets || [];
+    return (
+      data.passwordResets.find(
+        (r: any) => r.email === email && r.code === code && !r.used && r.expires_at > now
+      ) || null
+    );
+  },
+  consumePasswordReset(email: string, code: string) {
+    data.passwordResets = data.passwordResets || [];
+    const r = data.passwordResets.find((r: any) => r.email === email && r.code === code);
+    if (r) r.used = true;
+    persist();
   },
 
   createRefreshToken(row: { id: string; user_id: string; token_hash: string; expires_at: string }) {

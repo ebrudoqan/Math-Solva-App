@@ -114,3 +114,71 @@ authRouter.get("/me", requireAuth, (req: AuthedRequest, res) => {
   if (!user) return res.status(404).json(problemDetails(404, "Bulunamadı", "Kullanıcı bulunamadı."));
   res.json({ id: user.id, email: user.email, name: user.name, created_at: user.created_at });
 });
+
+const forgotPasswordSchema = z.object({ email: z.string().email() });
+
+/**
+ * POST /auth/forgot-password
+ *
+ * NOT: Bu projede e-posta gönderme servisi kurulu değil (ayrı bir hesap/API
+ * anahtarı gerektirir). Bu yüzden sıfırlama kodu doğrudan API yanıtında
+ * döndürülüyor — bu SADECE demo/öğrenme amaçlı bir basitleştirme, gerçek bir
+ * üretim uygulamasında kod asla client'a değil, sadece kullanıcının
+ * e-postasına gönderilmelidir.
+ */
+authRouter.post("/forgot-password", loginRateLimiter, (req, res) => {
+  const parsed = forgotPasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json(problemDetails(400, "Doğrulama Hatası", "Geçerli bir e-posta girin."));
+  }
+  const { email } = parsed.data;
+
+  const user = store.findUserByEmail(email);
+  // Kullanıcı yoksa bile aynı yanıtı döneriz (e-posta numaralandırma saldırısını önlemek için)
+  if (!user) {
+    return res.json({ message: "Bu e-posta kayıtlıysa bir sıfırlama kodu oluşturuldu." });
+  }
+
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  store.createPasswordReset(email, code, expiresAt);
+
+  res.json({
+    message: "Bu e-posta kayıtlıysa bir sıfırlama kodu oluşturuldu.",
+    devCode: code, // DEMO AMAÇLI: gerçek üretimde bu satır olmamalı, kod e-postayla gider
+  });
+});
+
+const resetPasswordSchema = z.object({
+  email: z.string().email(),
+  code: z.string().length(6),
+  newPassword: z.string().min(8, "Şifre en az 8 karakter olmalı."),
+});
+
+authRouter.post("/reset-password", (req, res) => {
+  const parsed = resetPasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res
+      .status(400)
+      .json(problemDetails(400, "Doğrulama Hatası", parsed.error.issues[0].message));
+  }
+  const { email, code, newPassword } = parsed.data;
+
+  const reset = store.findValidPasswordReset(email, code);
+  if (!reset) {
+    return res
+      .status(400)
+      .json(problemDetails(400, "Geçersiz Kod", "Kod geçersiz veya süresi dolmuş."));
+  }
+
+  const user = store.findUserByEmail(email);
+  if (!user) {
+    return res.status(404).json(problemDetails(404, "Bulunamadı", "Kullanıcı bulunamadı."));
+  }
+
+  bcrypt.hash(newPassword, 12).then((hash) => {
+    store.updateUserPassword(user.id, hash);
+    store.consumePasswordReset(email, code);
+    res.json({ message: "Şifren başarıyla güncellendi." });
+  });
+});
